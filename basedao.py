@@ -7,13 +7,16 @@ class BaseDao(object):
     """
     简便的数据库操作基类
     """
-    __config = {}                   # 数据库连接配置
-    __conn = None                   # 数据库连接
-    __cursor = None                 # 数据库游标
-    __database = None               # 用于临时村塾查询数据库
-    __tableName = None              # 用于临时存储查询表名
-    __fields = []                   # 用于临时存储查询表的字段列表
-    __primaryKey_dict = {}          # 用于存储配置中的数据库中所有表的主键
+    # 类变量定义在这的时候会出现问题：当程序运行并且实例化了两个不同的（连接数据库不同） BaseDao 时，
+    # self.__primaryKey_dict 会出现异常（两个实例的self.__primaryKey_dict相同）暂不知为何引起这个错误。
+    # 我们将在 __init__ 方法中定义类成员。
+    # __config = {}                   # 数据库连接配置
+    # __conn = None                   # 数据库连接
+    # __cursor = None                 # 数据库游标
+    # __database = None               # 用于临时存储查询数据库
+    # __tableName = None              # 用于临时存储查询表名
+    # __fields = []                   # 用于临时存储查询表的字段列表
+    # __primaryKey_dict = {}          # 用于存储配置中的数据库中所有表的主键
 
     def __init__(self, creator=pymysql, host="localhost", user=None, password="", database=None, port=3306, charset="utf8"):
         if host is None:
@@ -26,25 +29,31 @@ class BaseDao(object):
             raise Exception("Parameter [database] is None.")
         if port is None:
             raise Exception("Parameter [port] is None.")
+        self.__tableName = None              # 用于临时存储查询表名
+        self.__fields = []                   # 用于临时存储查询表的字段列表
+        self.__primaryKey_dict = {}          # 用于存储配置中的数据库中所有表的主键
+        # 数据库连接配置
         self.__config = dict({
             "creator" : creator, "charset":charset,
             "host":host, "port":port, 
             "user":user, "password":password, "database":database
         })
+        # 数据库连接
         self.__conn = PooledDB.connect(**self.__config)
+        # 数据库游标
         self.__cursor = self.__conn.cursor()
+        # 用于存储查询数据库
         self.__database = self.__config["database"]
         self.__init_primaryKey()
-        print(get_time(), "数据库连接初始化成功。")
+        print(get_time(), self.__database, "数据库连接初始化成功。")
         
     def __del__(self):
         '重写类被清除时调用的方法'
         if self.__cursor:
             self.__cursor.close()
-            print(get_time(), "游标关闭")
         if self.__conn:
             self.__conn.close()
-            print(get_time(), "连接关闭")
+            print(get_time(), self.__database, "连接关闭")
 
     def select_one(self, tableName=None, filters={}):
         '''
@@ -120,6 +129,27 @@ class BaseDao(object):
         self.__cursor.execute(sql)
         results = self.__cursor.fetchall()
         return self.__parse_results(results)
+
+    def select_database_struts(self):
+        '''
+        查找当前连接配置中的数据库结构以字典集合
+        '''
+        sql = '''SELECT COLUMN_NAME, IS_NULLABLE, COLUMN_TYPE, COLUMN_KEY, COLUMN_COMMENT
+                FROM information_schema.`COLUMNS` 
+                WHERE TABLE_SCHEMA="%s" AND TABLE_NAME="{0}" '''%(self.__database)
+        struts = {}
+        for k in self.__primaryKey_dict.keys():
+            self.__cursor.execute(sql.format(k))
+            results = self.__cursor.fetchall()
+            struts[k] = {}
+            for result in results:
+                struts[k][result[0]] = {}
+                struts[k][result[0]]["COLUMN_NAME"] = result[0]
+                struts[k][result[0]]["IS_NULLABLE"] = result[1]
+                struts[k][result[0]]["COLUMN_TYPE"] = result[2]
+                struts[k][result[0]]["COLUMN_KEY"] = result[3]
+                struts[k][result[0]]["COLUMN_COMMENT"] = result[4]
+        return self.__config, struts
 
     def __parse_result(self, result):
         '用于解析单个查询结果，返回字典对象'
