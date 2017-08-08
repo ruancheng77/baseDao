@@ -1,189 +1,144 @@
-import json, os, sys, time
+import json, os, sys, time, pymysql, pprint
 
-import pymysql
 from DBUtils import PooledDB
+
+def print(*args):
+    pprint.pprint(args)
+
+def get_time():
+    '获取时间'
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+def stitch_sequence(seq=None, suf=None):
+    '如果参数（"suf"）不为空，则根据特殊的suf拼接列表元素，返回一个字符串'
+    if seq is None: raise Exception("Parameter seq is None");
+    if suf is None: suf = ","
+    r = str()
+    for s in seq:
+        r += s + suf
+    return r[:-len(suf)]
 
 class BaseDao(object):
     """
     简便的数据库操作基类
     """
-    # 类变量定义在这的时候会出现问题：当程序运行并且实例化了两个不同的（连接数据库不同） BaseDao 时，
-    # self.__primaryKey_dict 会出现异常（两个实例的self.__primaryKey_dict相同）暂不知为何引起这个错误。
-    # 我们将在 __init__ 方法中定义类成员。
-    # __config = {}                   # 数据库连接配置
-    # __conn = None                   # 数据库连接
-    # __cursor = None                 # 数据库游标
-    # __database = None               # 用于临时存储查询数据库
-    # __tableName = None              # 用于临时存储查询表名
-    # __fields = []                   # 用于临时存储查询表的字段列表
-    # __primaryKey_dict = {}          # 用于存储配置中的数据库中所有表的主键
-
-    def __init__(self, creator=pymysql, host="localhost", user=None, password="", database=None, port=3306, charset="utf8"):
-        if host is None:
-            raise Exception("Parameter [host] is None.")
-        if user is None:
-            raise Exception("Parameter [user] is None.")
-        if password is None:
-            raise Exception("Parameter [password] is None.")
-        if database is None:
-            raise Exception("Parameter [database] is None.")
-        if port is None:
-            raise Exception("Parameter [port] is None.")
-        self.__tableName = None              # 用于临时存储查询表名
-        self.__fields = []                   # 用于临时存储查询表的字段列表
-        self.__primaryKey_dict = {}          # 用于存储配置中的数据库中所有表的主键
+    def __init__(self, creator=pymysql, host="localhost",port=3306, user=None, password="",
+                    database=None, charset="utf8"):
+        if host is None: raise Exception("Parameter [host] is None.")
+        if port is None: raise Exception("Parameter [port] is None.")
+        if user is None: raise Exception("Parameter [user] is None.")
+        if password is None: raise Exception("Parameter [password] is None.")
+        if database is None: raise Exception("Parameter [database] is None.")
         # 数据库连接配置
         self.__config = dict({
-            "creator" : creator, "charset":charset,
-            "host":host, "port":port, 
+            "creator" : creator, "charset":charset, "host":host, "port":port, 
             "user":user, "password":password, "database":database
         })
-        # 数据库连接
-        self.__conn = PooledDB.connect(**self.__config)
-        # 数据库游标
-        self.__cursor = self.__conn.cursor()
-        # 用于存储查询数据库
-        self.__database = self.__config["database"]
-        self.__init_primaryKey()
-        print(get_time(), self.__database, "数据库连接初始化成功。")
+        self.__database = self.__config["database"]     # 用于存储查询数据库
+        self.__tableName = None                         # 用于临时存储当前查询表名
+        # 初始化
+        self.__init_connect()                           # 初始化连接
+        self.__init_params()                            # 初始化参数
+        print(get_time(), self.__database, "数据库初始化成功。")
         
     def __del__(self):
         '重写类被清除时调用的方法'
-        if self.__cursor:
-            self.__cursor.close()
-        if self.__conn:
-            self.__conn.close()
-            print(get_time(), self.__database, "连接关闭")
+        if self.__cursor: self.__cursor.close()
+        if self.__conn: self.__conn.close()
+        print(get_time(), self.__database, "连接关闭")
 
-    def select_one(self, tableName=None, filters={}):
-        '''
-        查询单个对象
-        @tableName 表名
-        @filters 过滤条件
-        @return 返回字典集合，集合中以表字段作为 key，字段值作为 value
-        '''
-        self.__check_params(tableName)
-        sql = self.__query_util(filters)
-        self.__cursor.execute(sql)
-        result = self.__cursor.fetchone()
-        return self.__parse_result(result)
+    def __init_connect(self):
+        self.__conn = PooledDB.connect(**self.__config)
+        self.__cursor = self.__conn.cursor()
 
-    def select_pk(self, tableName=None, primaryKey=None):
-        '''
-        按主键查询
-        @tableName 表名
-        @primaryKey 主键值
-        '''
-        self.__check_params(tableName)
-        filters = {}
-        filters.setdefault(str(self.__primaryKey_dict[tableName]), primaryKey)
-        sql = self.__query_util(filters)
-        self.__cursor.execute(sql)
-        result = self.__cursor.fetchone()
-        return self.__parse_result(result)
+    def __init_params(self):
+        '初始化参数'
+        self.__init_table_dict()
+        self.__init__table_column_dict_list()
+
+    def __init__information_schema_columns(self):
+        "查询 information_schema.`COLUMNS` 中的列"
+        sql =   """ SELECT COLUMN_NAME FROM information_schema.`COLUMNS`
+                    WHERE TABLE_SCHEMA='information_schema' AND TABLE_NAME='COLUMNS'
+                """
+        result_tuple = self.__exec_query(sql)
+        column_list = [r[0] for r in result_tuple]
+        return column_list
+
+    def __init_table_dict(self):
+        "查询配置数据库中改的所有表"
+        schema_column_list = self.__init__information_schema_columns()
+        stitch_str = stitch_sequence(schema_column_list)
+        sql1 =  """ SELECT TABLE_NAME FROM information_schema.`TABLES`
+                    WHERE TABLE_SCHEMA='%s'
+                """ %(self.__database)
+        table_tuple = self.__exec_query(sql1)
+        self.__table_dict = {t[0]:{} for t in table_tuple}
+        for table in self.__table_dict.keys():
+            sql =   """ SELECT %s FROM information_schema.`COLUMNS`
+                        WHERE TABLE_SCHEMA='%s' AND TABLE_NAME='%s'
+                    """ %(stitch_str, self.__database, table)
+            column_tuple = self.__exec_query(sql)
+            column_dict = {}
+            for vs in column_tuple:
+                d = {k:v for k,v in zip(schema_column_list, vs)}
+                column_dict[d["COLUMN_NAME"]] = d
+            self.__table_dict[table] = column_dict
+
+    def __init__table_column_dict_list(self):
+        self.__table_column_dict_list = {}
+        for table, column_dict in self.__table_dict.items():
+            column_list = [column for column in column_dict.keys()]
+            self.__table_column_dict_list[table] = column_list
         
-    def select_all(self, tableName=None, filters={}):
+    def __exec_query(self, sql, single=False):
         '''
-        查询所有
-        @tableName 表名
-        @filters 过滤条件
-        @return 返回字典集合，集合中以表字段作为 key，字段值作为 value
+        执行查询方法
+        - @sql    查询 sql
+        - @single 是否查询单个结果集，默认False
         '''
-        self.__check_params(tableName)
-        sql = self.__query_util(filters)
-        self.__cursor.execute(sql)
-        results = self.__cursor.fetchall()
-        return self.__parse_results(results)
+        try:
+            self.__cursor.execute(sql)
+            print(get_time(), "SQL[%s]"%sql)
+            if single:
+                result_tuple = self.__cursor.fetchone()
+            else:
+                result_tuple = self.__cursor.fetchall()
+            return result_tuple
+        except Exception as e:
+            print(e)
 
-    def count(self, tableName=None):
-        '''
-        统计记录数
-        '''
-        self.__check_params(tableName)
-        sql = "SELECT count(*) FROM %s"%(self.__tableName)
-        self.__cursor.execute(sql)
-        result = self.__cursor.fetchone()
-        return result[0]
-
-    def select_page(self, tableName=None, pageNum=1, limit=10, filters={}):
-        '''
-        分页查询
-        @tableName 表名
-        @return 返回字典集合，集合中以表字段作为 key，字段值作为 value
-        '''
-        self.__check_params(tableName)
-        totalCount = self.count()
-        if totalCount / limit == 0 :
-            totalPage = totalCount / limit
-        else:
-            totalPage = totalCount // limit + 1
-        if pageNum > totalPage:
-            print("最大页数为%d"%totalPage)
-            pageNum = totalPage
-        elif pageNum < 1:
-            print("页数不能小于1")
-            pageNum = 1
-        beginindex = (pageNum-1) * limit
-        filters.setdefault("_limit_", (beginindex, limit))
-        sql = self.__query_util(filters)
-        self.__cursor.execute(sql)
-        results = self.__cursor.fetchall()
-        return self.__parse_results(results)
-
-    def select_database_struts(self):
-        '''
-        查找当前连接配置中的数据库结构以字典集合
-        '''
-        sql = '''SELECT COLUMN_NAME, IS_NULLABLE, COLUMN_TYPE, COLUMN_KEY, COLUMN_COMMENT
-                FROM information_schema.`COLUMNS` 
-                WHERE TABLE_SCHEMA="%s" AND TABLE_NAME="{0}" '''%(self.__database)
-        struts = {}
-        for k in self.__primaryKey_dict.keys():
-            self.__cursor.execute(sql.format(k))
-            results = self.__cursor.fetchall()
-            struts[k] = {}
-            for result in results:
-                struts[k][result[0]] = {}
-                struts[k][result[0]]["COLUMN_NAME"] = result[0]
-                struts[k][result[0]]["IS_NULLABLE"] = result[1]
-                struts[k][result[0]]["COLUMN_TYPE"] = result[2]
-                struts[k][result[0]]["COLUMN_KEY"] = result[3]
-                struts[k][result[0]]["COLUMN_COMMENT"] = result[4]
-        return self.__config, struts
+    def __exec_update(self, sql):
+        try:
+            # 获取数据库游标
+            result = self.__cursor.execute(sql)
+            print(get_time(), "SQL[%s]"%sql)
+            self.__conn.commit()
+            return result
+        except Exception as e:
+            print(e)
+            self.__conn.rollback()
 
     def __parse_result(self, result):
         '用于解析单个查询结果，返回字典对象'
-        obj = {}
-        for k,v in zip(self.__fields, result):
-            obj[k] = v
+        if result is None: return None
+        obj = {k:v for k,v in zip(self.__column_list, result)}
         return obj
 
     def __parse_results(self, results):
         '用于解析多个查询结果，返回字典列表对象'
-        objs = []
-        for result in results:
-            obj = self.__parse_result(result)
-            objs.append(obj)
+        if results is None: return None
+        objs = [self.__parse_result(result) for result in results]
         return objs
 
-    def __init_primaryKey(self):
-        '根据配置中的数据库读取该数据库中所有表的主键集合'
-        sql = """SELECT TABLE_NAME, COLUMN_NAME
-                FROM  Information_schema.columns
-                WHERE COLUMN_KEY='PRI' AND TABLE_SCHEMA='%s'"""%(self.__database)
-        self.__cursor.execute(sql)
-        results = self.__cursor.fetchall()
-        for result in results:
-            self.__primaryKey_dict[result[0]] = result[1]
+    def __getpk(self, tableName):
+        if self.__table_dict.get(tableName) is None: raise Exception(tableName, "is not exist.")
+        for column, column_dict in self.__table_dict[tableName].items():
+            if column_dict["COLUMN_KEY"] == "PRI": return column
 
-    def __query_fields(self, tableName=None, database=None):
+    def __get_table_column_list(self, tableName=None):
         '查询表的字段列表, 将查询出来的字段列表存入 __fields 中'
-        sql = """SELECT column_name
-                FROM  Information_schema.columns
-                WHERE table_Name = '%s' AND TABLE_SCHEMA='%s'"""%(tableName, database)
-        self.__cursor.execute(sql)
-        fields_tuple = self.__cursor.fetchall()
-        self.__fields = [fields[0] for fields in fields_tuple]
+        return self.__table_column_dict_list[tableName]
 
     def __query_util(self, filters=None):
         """
@@ -194,11 +149,7 @@ class BaseDao(object):
         # 拼接查询表
         sql = sql.replace("#{TABLE_NAME}", self.__tableName)
         # 拼接查询字段
-        self.__query_fields(self.__tableName, self.__database)
-        FIELDS = ""
-        for field in self.__fields:
-            FIELDS += field + ", "
-        FIELDS = FIELDS[0: len(FIELDS)-2]
+        FIELDS = stitch_sequence(self.__get_table_column_list(self.__tableName))
         sql = sql.replace("#{FIELDS}", FIELDS)
         # 拼接查询条件（待优化）
         if filters is None:
@@ -208,9 +159,8 @@ class BaseDao(object):
             if not isinstance(filters, dict):
                 raise Exception("Parameter [filters] must be dict type. ")
             isPage = False
-            if filters.get("_limit_"):
-                isPage = True
-                beginindex, limit = filters.get("_limit_")
+            if filters.get("_limit_"): isPage = True
+            if isPage: beginindex, limit = filters.pop("_limit_")
             for k, v in filters.items():
                 if k.startswith("_in_"):                # 拼接 in
                     FILTERS += "AND %s IN (" %(k[4:])
@@ -236,27 +186,91 @@ class BaseDao(object):
                     FILTERS += "AND %s > '%s' " %(k[4:], v)
                 elif k.startswith("_ge_"):              # 拼接大于等于
                     FILTERS += "AND %s >= '%s' " %(k[4:], v)
-                elif k in self.__fields:                # 拼接等于
-                    FILTERS += "AND %s = '%s' "%(k, v)
+                else:                # 拼接等于
+                    FILTERS += "AND %s='%s' "%(k, v)
             sql = sql.replace("#{FILTERS}", FILTERS)
-            if isPage:
-                sql += "LIMIT %d,%d"%(beginindex, limit)
-
-        print(get_time(), sql)
+            if isPage: sql += "LIMIT %d,%d"%(beginindex, limit)
         return sql
 
     def __check_params(self, tableName):
         '''
         检查参数
         '''
-        if tableName:
+        if tableName is None and self.__tableName is None:
+            raise Exception("Parameter [tableName] is None.")
+        elif self.__tableName is None or self.__tableName != tableName:
             self.__tableName = tableName
-        else:
-            if self.__tableName is None:
-                raise Exception("Parameter [tableName] is None.")
+            self.__column_list = self.__table_column_dict_list[self.__tableName]
 
-def get_time():
-    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    def select_one(self, tableName=None, filters={}):
+        '''
+        查询单个对象
+        @tableName 表名
+        @filters 过滤条件
+        @return 返回字典集合，集合中以表字段作为 key，字段值作为 value
+        '''
+        self.__check_params(tableName)
+        sql = self.__query_util(filters)
+        result = self.__exec_query(sql, single=True)
+        return self.__parse_result(result) 
+
+    def select_pk(self, tableName=None, primaryKey=None):
+        '''
+        按主键查询
+        @tableName 表名
+        @primaryKey 主键值
+        '''
+        self.__check_params(tableName)
+        filters = {}
+        filters.setdefault(self.__getpk(tableName), primaryKey)
+        sql = self.__query_util(filters)
+        result = self.__exec_query(sql, single=True)
+        return self.__parse_result(result)
+        
+    def select_all(self, tableName=None, filters={}):
+        '''
+        查询所有
+        @tableName 表名
+        @filters 过滤条件
+        @return 返回字典集合，集合中以表字段作为 key，字段值作为 value
+        '''
+        self.__check_params(tableName)
+        sql = self.__query_util(filters)
+        results = self.__exec_query(sql)
+        return self.__parse_results(results)
+
+    def count(self, tableName=None):
+        '''
+        统计记录数
+        '''
+        self.__check_params(tableName)
+        sql = "SELECT count(*) FROM %s"%(self.__tableName)
+        result = self.__exec_query(sql, single=True)
+        return result[0]
+
+    def select_page(self, tableName=None, pageNum=1, limit=10, filters={}):
+        '''
+        分页查询
+        @tableName 表名
+        @return 返回字典集合，集合中以表字段作为 key，字段值作为 value
+        '''
+        self.__check_params(tableName)
+        totalCount = self.count(tableName)
+        if totalCount / limit == 0 :
+            totalPage = totalCount / limit
+        else:
+            totalPage = totalCount // limit + 1
+        if pageNum > totalPage:
+            print("最大页数为%d"%totalPage)
+            pageNum = totalPage
+        elif pageNum < 1:
+            print("页数不能小于1")
+            pageNum = 1
+        beginindex = (pageNum-1) * limit
+        filters.setdefault("_limit_", (beginindex, limit))
+        sql = self.__query_util(filters)
+        result_tuple = self.__exec_query(sql)
+        return self.__parse_results(result_tuple)
 
 if __name__ == "__main__":
     config = {
@@ -270,31 +284,27 @@ if __name__ == "__main__":
     }
     base = BaseDao(**config)
     ########################################################################
-    # user = base.select_one("user")
-    # print(user)
+    user = base.select_one("user")
+    print(user)
     ########################################################################
     # users = base.select_all("user")
     # print(users)
     ########################################################################
-    # filter1 = {
-    #     "sex":0,
-    #     "_in_id":"1,2,3,4,5",
-    #     "_like_name":"zhang",
-    #     "_ne_name":"wangwu"
-    # }
-    # user_filters = base.select_all(tableName="user", filters=filter1)
-    # print(user_filters)
+    filter1 = {
+        "status":1,
+        "_in_id":"1,2,3,4,5",
+        "_like_name":"zhang",
+        "_ne_name":"wangwu"
+    }
+    user_filters = base.select_all("user", filter1)
+    print(user_filters)
     ########################################################################
-    # menu = base.select_one(tableName="menu")
-    # print(menu)
+    role = base.select_one("role")
+    print(role)
     ########################################################################
-    # user_pk = base.select_pk("user", 2)
-    # print(user_pk)
+    user_pk = base.select_pk("user", 2)
+    print(user_pk)
     ########################################################################
-    # filter2 = {
-    #     "_in_id":"1,2,3,4",
-    #     "_like_name":"test"
-    # }
-    # user_limit = base.select_page("user", 2, 10, filter2)  #未实现
-    # print(user_limit)
+    user_limit = base.select_page("user", 1, 10)
+    print(user_limit)
     ########################################################################
