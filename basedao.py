@@ -260,6 +260,7 @@ class BaseDao(object):
         VALUES = []
         for k, v in obj.items():
             if self.__table_dict[tableName][k]["COLUMN_KEY"] != "PKI":
+            if self.__table_dict[self.__tableName][k]["COLUMN_KEY"] != "PKI":
                 if v is None:
                     v = "null"
                 else:
