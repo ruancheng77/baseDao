@@ -20,7 +20,7 @@ def stitch_sequence(seq=None, suf=None):
     if suf is None: suf = ","
     r = str()
     for s in seq:
-        r += s + suf
+        r += "%s%s"%(s,suf)
     return r[:-len(suf)]
 
 class BaseDao(object):
