@@ -259,7 +259,6 @@ class BaseDao(object):
         FIELDS = stitch_sequence(seq=obj.keys())
         VALUES = []
         for k, v in obj.items():
-            if self.__table_dict[tableName][k]["COLUMN_KEY"] != "PKI":
             if self.__table_dict[self.__tableName][k]["COLUMN_KEY"] != "PKI":
                 if v is None:
                     v = "null"
@@ -280,9 +279,9 @@ class BaseDao(object):
         l = []
         where = "WHERE "
         for k, v in obj.items():
-            if self.__table_dict[tableName][k]["COLUMN_KEY"] != "PRI":
+            if self.__table_dict[self.__tableName][k]["COLUMN_KEY"] != "PRI":
                 if v is None:
-                    if self.__table_dict[tableName][k]["IS_NULLABLE"] == "YES":
+                    if self.__table_dict[self.__tableName][k]["IS_NULLABLE"] == "YES":
                         l.append("%s=null"%(k))
                     else:
                         l.append("%s=''"%(k))
@@ -303,7 +302,7 @@ class BaseDao(object):
         where = "WHERE "
         l = []
         for k, v in obj.items():
-            if self.__table_dict[tableName][k]["COLUMN_KEY"] != "PRI":
+            if self.__table_dict[self.__tableName][k]["COLUMN_KEY"] != "PRI":
                 if v is None:
                     continue
                 l.append("%s='%s'"%(k, v))
@@ -396,11 +395,11 @@ class QueryUtil(object):
                     s += " %s,"%value
                 s = s[0:len(s)-1] + ") "
             elif k.startswith(QueryUtil.LIKE):              # 拼接 like
-                s += " AND %s LIKE '%%%s%%' " %(k[6:], v)
+                s += " AND %s LIKE '%%%s%%' " %(k[len(QueryUtil.LIKE):], v)
             elif k.startswith(QueryUtil.LEFT_LIKE):         # 拼接左 like
-                s += " AND %s LIKE '%%%s%' " %(k[6:], v)
+                s += " AND %s LIKE '%%%s' " %(k[len(QueryUtil.LEFT_LIKE):], v)
             elif k.startswith(QueryUtil.RIGHT_LIKE):        # 拼接右 like
-                s += " AND %s LIKE '%%s%%' " %(k[6:], v)
+                s += " AND %s LIKE '%s%%' " %(k[len(QueryUtil.RIGHT_LIKE):], v)
             elif k.startswith(QueryUtil.NE):                # 拼接不等于
                 s += " AND %s != '%s' " %(k[4:], v)
             elif k.startswith(QueryUtil.LT):                # 拼接小于
