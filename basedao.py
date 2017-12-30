@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding=utf-8 -*-
 
-import json
+'''
+基于 DBUtils 和 pymysql 结合的简便操作数据库的类.
+'''
+__author__ = "阮程"
+
 import logging
-import os
-import sys
 import time
 
 import pymysql
 from DBUtils import PooledDB
-
-__author__ = "阮程"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,26 +18,29 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
 
+def get_time(fmt=None):
+    '''
+    获取当前时间
+    - @param: fmt 时间格式化字符串
+    '''
+    fmt = fmt or "%Y-%m-%d %H:%M:%S"
+    return time.strftime(fmt, time.localtime())
 
-def get_time(format=None):
-    '获取时间'
-    format = format or "%Y-%m-%d %H:%M:%S"
-    return time.strftime(format, time.localtime())
 
-
-def stitch_sequence(seq=None, suf=None, isField=True):
-    '如果参数（"suf"）不为空，则根据特殊的suf拼接列表元素，返回一个字符串。默认使用 ","。'
+def stitch_sequence(seq=None, suf=None, is_field=True):
+    '''
+    序列拼接方法, 用于将序列拼接成字符串
+    - :seq: 拼接序列
+    - :suf: 拼接后缀(默认使用 ",")
+    - :is_field: 是否为数据库字段序列
+    '''
     if seq is None:
         raise Exception("Parameter seq is None")
     suf = suf or ","
-    r = str()
-    for s in seq:
-        r += '`%s`%s' % (s, suf) if isField else '%s%s' % (s, suf)
-        # if isField:
-        #     r += '`%s`%s' % (s, suf)
-        # else:
-        #     r += '%s%s' % (s, suf)
-    return r[:-len(suf)]
+    res = str()
+    for item in seq:
+        res += '`%s`%s' % (item, suf) if is_field else '%s%s' % (item, suf)
+    return res[:-len(suf)]
 
 
 class BaseDao(object):
@@ -51,12 +54,12 @@ class BaseDao(object):
     - :password: 连接数据库密码(默认: None), 如果为空，则会抛异常
     - :database: 连接数据库(默认: None), 如果为空，则会抛异常
     - :chatset: 编码(默认: utf8)
-    - :tableName: 初始化 BaseDao 对象的数据库表名(默认: None), 如果为空，
-    则会初始化该数据库下所有表的信息, 如果不为空，则只初始化传入的 tableName 的表
+    - :table: 初始化 BaseDao 对象的数据库表名(默认: None), 如果为空，
+    则会初始化该数据库下所有表的信息, 如果不为空，则只初始化传入的 table 的表
     """
 
     def __init__(self, creator=pymysql, host="localhost", port=3306, user=None, password=None,
-                 database=None, charset="utf8", tableName=None, *args, **kwargs):
+                 database=None, charset="utf8", table=None):
         if host is None:
             raise ValueError("Parameter [host] is None.")
         if port is None:
@@ -67,26 +70,21 @@ class BaseDao(object):
             raise ValueError("Parameter [password] is None.")
         if database is None:
             raise ValueError("Parameter [database] is None.")
-        if tableName is None:
+        if table is None:
             print(
-                "WARNING >>> Parameter [tableName] is None. All tables will be initialized.")
-        logging.debug(
-            "[%s] 数据库初始化>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>开始" % (database))
+                "WARNING >>> Parameter [table] is None. All tables will be initialized.")
         start = time.time()
-        # 数据库连接配置
-        self.__config = dict({
+        # 执行初始化
+        self._config = dict({
             "creator": creator, "charset": charset, "host": host, "port": port,
             "user": user, "password": password, "database": database
         })
-        self.__database = database                      # 用于存储查询数据库
-        self.__tableName = tableName                    # 用于临时存储当前查询表名
-        # 初始化
-        self.__init_connect()                           # 初始化连接
-        self.__init_params()                            # 初始化参数
+        self._database = database
+        self._table = table
+        self._init_connect()
+        self._init_params()
         end = time.time()
-        logging.debug(
-            "[%s] 数据库初始化>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>结束" % (database))
-        logging.info("[%s] 数据库初始化成功。耗时：%d ms。" % (database, (end - start)))
+        logging.info("[{0}] 数据库初始化成功。耗时：{1} ms。".format(database, (end - start)))
 
     def __del__(self):
         '重写类被清除时调用的方法'
@@ -94,127 +92,130 @@ class BaseDao(object):
             self.__cursor.close()
         if self.__conn:
             self.__conn.close()
-        logging.debug("[%s] 连接关闭。" % (self.__database))
+        logging.debug("[{0}] 连接关闭。".format(self._database))
 
-    def __init_connect(self):
+    def _init_connect(self):
         '初始化连接'
-        self.__conn = PooledDB.connect(**self.__config)
-        self.__cursor = self.__conn.cursor()
+        try:
+            self.__conn = PooledDB.connect(**self._config)
+            self.__cursor = self.__conn.cursor()
+        except Exception as e:
+            logging.error(e)
 
-    def __init_params(self):
+    def _init_params(self):
         '初始化参数'
-        self.__table_dict = {}
-        self.__information_schema_columns = []
-        self.__table_column_dict_list = {}
-        if self.__tableName is None:
-            self.__init_table_dict_list()
-            self.__init__table_column_dict_list()
+        self._table_dict = {}
+        self._information_schema_columns = []
+        self._table_column_dict_list = {}
+        if self._table is None:
+            self._init_table_dict_list()
+            self._init_table_column_dict_list()
         else:
-            self.__init_table_dict(self.__tableName)
-            self.__init__table_column_dict_list()
-            self.__column_list = self.__table_column_dict_list[self.__tableName]
+            self._init_table_dict(self._table)
+            self._init_table_column_dict_list()
+            self._column_list = self._table_column_dict_list[self._table]
 
-    def __init__information_schema_columns(self):
+    def _init_information_schema_columns(self):
         "查询 information_schema.`COLUMNS` 中的列"
-        sql = """   SELECT COLUMN_NAME 
+        sql = """   SELECT COLUMN_NAME
                     FROM information_schema.`COLUMNS`
                     WHERE TABLE_SCHEMA='information_schema' AND TABLE_NAME='COLUMNS'
                 """
         result_tuple = self.execute_query(sql)
         column_list = [r[0] for r in result_tuple]
-        self.__information_schema_columns = column_list
+        self._information_schema_columns = column_list
 
-    def __init_table_dict(self, tableName):
+    def _init_table_dict(self, table_name):
         '初始化表'
-        if not self.__information_schema_columns:
-            self.__init__information_schema_columns()
-        stitch_str = stitch_sequence(self.__information_schema_columns)
+        if not self._information_schema_columns:
+            self._init_information_schema_columns()
+        stitch_str = stitch_sequence(self._information_schema_columns)
         sql = """   SELECT %s FROM information_schema.`COLUMNS`
                     WHERE TABLE_SCHEMA='%s' AND TABLE_NAME='%s'
-                """ % (stitch_str, self.__database, tableName)
+                """ % (stitch_str, self._database, table_name)
         column_tuple = self.execute_query(sql)
         column_dict = {}
-        for vs in column_tuple:
-            d = {k: v for k, v in zip(self.__information_schema_columns, vs)}
-            column_dict[d["COLUMN_NAME"]] = d
-        self.__table_dict[tableName] = column_dict
+        for column in column_tuple:
+            column_dict_item = {key: value for key, value in zip(
+                self._information_schema_columns, column)}
+            column_dict[column_dict_item["COLUMN_NAME"]] = column_dict_item
+        self._table_dict[table_name] = column_dict
 
-    def __init_table_dict_list(self):
+    def _init_table_dict_list(self):
         "初始化表字典对象"
-        if not self.__information_schema_columns:
-            self.__init__information_schema_columns()
-        stitch_str = stitch_sequence(self.__information_schema_columns)
-        sql = """  SELECT TABLE_NAME FROM information_schema.`TABLES` 
-                    WHERE TABLE_SCHEMA='%s'
-                """ % (self.__database)
+        if not self._information_schema_columns:
+            self._init_information_schema_columns()
+        sql = "SELECT TABLE_NAME FROM information_schema.`TABLES` WHERE TABLE_SCHEMA='%s'" % (
+            self._database)
         table_tuple = self.execute_query(sql)
-        self.__table_dict = {t[0]: {} for t in table_tuple}
+        self._table_dict = {t[0]: {} for t in table_tuple}
         for table in table_tuple:
-            self.__init_table_dict(table[0])
+            self._init_table_dict(table[0])
 
-    def __init__table_column_dict_list(self):
+    def _init_table_column_dict_list(self):
         '''初始化表字段字典列表'''
-        for table, column_dict in self.__table_dict.items():
+        for table, column_dict in self._table_dict.items():
             column_list = [column for column in column_dict.keys()]
-            self.__table_column_dict_list[table] = column_list
+            self._table_column_dict_list[table] = column_list
 
-    def __parse_result(self, result):
+    def _parse_result(self, result):
         '用于解析单个查询结果，返回字典对象'
         if result is None:
             return None
-        obj = {k: v for k, v in zip(self.__column_list, result)}
+        obj = {key: value for key, value in zip(self._column_list, result)}
         return obj
 
-    def __parse_results(self, results):
+    def _parse_results(self, results):
         '用于解析多个查询结果，返回字典列表对象'
         if results is None:
             return None
-        objs = [self.__parse_result(result) for result in results]
+        objs = [self._parse_result(result) for result in results]
         return objs
 
-    def __getpk(self, tableName):
+    def _get_primary_key(self, table_name):
         '获取表对应的主键字段'
-        if self.__table_dict.get(tableName) is None:
-            raise Exception(tableName, "is not exist.")
-        for column, column_dict in self.__table_dict[tableName].items():
+        if self._table_dict.get(table_name) is None:
+            raise Exception(table_name, "is not exist.")
+        for column, column_dict in self._table_dict[table_name].items():
             if column_dict["COLUMN_KEY"] == "PRI":
                 return column
 
-    def __get_table_column_list(self, tableName=None):
+    def _get_table_column_list(self, table_name=None):
         '查询表的字段列表, 将查询出来的字段列表存入 __fields 中'
-        return self.__table_column_dict_list[tableName]
+        return self._table_column_dict_list[table_name]
 
-    def __check_tableName(self, tableName):
-        '''验证 tableName 参数'''
-        if tableName is None:
-            if self.__tableName is None:
-                raise Exception("Parameter [tableName] is None.")
+    def _check_table_name(self, table_name):
+        '''验证 table_name 参数'''
+        if table_name is None:
+            if self._table is None:
+                raise Exception("Parameter [table_name] is None.")
         else:
-            if self.__tableName != tableName:
-                self.__tableName = tableName
-                self.__column_list = self.__table_column_dict_list[self.__tableName]
+            if self._table != table_name:
+                self._table = table_name
+                self._column_list = self._table_column_dict_list[self._table]
 
-    def execute_query(self, sql, single=False):
+    def execute_query(self, sql=None, single=False):
         '''执行查询 SQL 语句
-        - @sql    查询 sql
-        - @single 是否查询单个结果集，默认False
+        - :sql: sql 语句
+        - :single: 是否查询单个结果集，默认False
         '''
         try:
-            logging.info("[%s] SQL >>> [%s]" % (self.__database, sql))
+            if sql is None:
+                raise Exception("Parameter sql is None.")
+            logging.info("[%s] SQL >>> [%s]" % (self._database, sql))
             self.__cursor.execute(sql)
-            if single:
-                result_tuple = self.__cursor.fetchone()
-            else:
-                result_tuple = self.__cursor.fetchall()
-            return result_tuple
+            return self.__cursor.fetchone() if single else self.__cursor.fetchall()
         except Exception as e:
             logging.error(e)
-    
-    def execute_update(self, sql):
-        '''执行更新 SQL 语句'''
+
+    def execute_update(self, sql=None):
+        '''执行更新 SQL 语句
+        - :sql: sql 语句
+        '''
         try:
-            # 获取数据库游标
-            logging.info("[%s] SQL >>> [%s]" % (self.__database, sql))
+            if sql is None:
+                raise Exception("Parameter sql is None.")
+            logging.info("[%s] SQL >>> [%s]" % (self._database, sql))
             result = self.__cursor.execute(sql)
             self.__conn.commit()
             return result
@@ -222,186 +223,201 @@ class BaseDao(object):
             logging.error(e)
             self.__conn.rollback()
 
-    def select_one(self, tableName=None, filters={}):
+    def select_one(self, table_name=None, filters=None):
         '''查询单个对象
-        - @tableName 表名
+        - @table_name 表名
         - @filters 过滤条件
         - @return 返回字典集合，集合中以表字段作为 key，字段值作为 value
         '''
-        self.__check_tableName(tableName)
-        FIELDS = stitch_sequence(
-            self.__get_table_column_list(self.__tableName))
-        sql = "SELECT %s FROM %s" % (FIELDS, self.__tableName)
+        self._check_table_name(table_name)
+        if filters is None:
+            filters = {}
+        stitch_str = stitch_sequence(
+            self._get_table_column_list(self._table))
+        sql = "SELECT %s FROM %s" % (stitch_str, self._table)
         sql = QueryUtil.query_sql(sql, filters)
-        result = self.execute_query(sql, single=True)
-        return self.__parse_result(result)
+        result = self.execute_query(sql, True)
+        return self._parse_result(result)
 
-    def select_pk(self, tableName=None, primaryKey=None):
+    def select_pk(self, table_name=None, primary_key=None):
         '''按主键查询
-        - @tableName 表名
-        - @primaryKey 主键值
+        - @table_name 表名
+        - @primary_key 主键值
         '''
-        self.__check_tableName(tableName)
-        FIELDS = stitch_sequence(
-            self.__get_table_column_list(self.__tableName))
-        sql = "SELECT %s FROM %s" % (FIELDS, self.__tableName)
-        sql = QueryUtil.query_sql(sql, {self.__getpk(tableName): primaryKey})
-        result = self.execute_query(sql, single=True)
-        return self.__parse_result(result)
+        self._check_table_name(table_name)
+        stitch_str = stitch_sequence(
+            self._get_table_column_list(self._table))
+        sql = "SELECT %s FROM %s" % (stitch_str, self._table)
+        sql = QueryUtil.query_sql(sql, {self._get_primary_key(self._table): primary_key})
+        result = self.execute_query(sql, True)
+        return self._parse_result(result)
 
-    def select_all(self, tableName=None, filters={}):
+    def select_all(self, table_name=None, filters=None):
         '''查询所有
-        - @tableName 表名
+        - @table_name 表名
         - @filters 过滤条件
         - @return 返回字典集合，集合中以表字段作为 key，字段值作为 value
         '''
-        self.__check_tableName(tableName)
-        FIELDS = stitch_sequence(
-            self.__get_table_column_list(self.__tableName))
-        sql = "SELECT %s FROM %s" % (FIELDS, self.__tableName)
+        self._check_table_name(table_name)
+        if filters is None:
+            filters = {}
+        stitch_str = stitch_sequence(
+            self._get_table_column_list(self._table))
+        sql = "SELECT %s FROM %s" % (stitch_str, self._table)
         sql = QueryUtil.query_sql(sql, filters)
         results = self.execute_query(sql)
-        return self.__parse_results(results)
+        return self._parse_results(results)
 
-    def count(self, tableName=None):
+    def count(self, table_name=None):
         '''统计记录数'''
-        self.__check_tableName(tableName)
-        sql = "SELECT count(*) FROM %s" % (self.__tableName)
-        result = self.execute_query(sql, single=True)
+        self._check_table_name(table_name)
+        sql = "SELECT count(*) FROM %s" % (self._table)
+        result = self.execute_query(sql, True)
         return result[0]
 
-    def select_page(self, tableName=None, page=None, filters={}):
+    def select_page(self, table_name=None, page=None, filters=None):
         '''分页查询
-        - @tableName 表名
+        - @table_name 表名
         - @return 返回字典集合，集合中以表字段作为 key，字段值作为 value
         '''
-        self.__check_tableName(tableName)
+        self._check_table_name(table_name)
+        if filters is None:
+            filters = {}
         if page is None:
             page = Page()
         filters["page"] = page
-        FIELDS = stitch_sequence(
-            self.__get_table_column_list(self.__tableName))
-        sql = "SELECT %s FROM %s" % (FIELDS, self.__tableName)
+        stitch_str = stitch_sequence(
+            self._get_table_column_list(self._table))
+        sql = "SELECT %s FROM %s" % (stitch_str, self._table)
         sql = QueryUtil.query_sql(sql, filters)
         result_tuple = self.execute_query(sql)
-        return self.__parse_results(result_tuple)
+        return self._parse_results(result_tuple)
 
-    def save(self, tableName=None, obj=dict()):
+    def save(self, table_name=None, obj=None):
         '''保存方法
-        - @param tableName 表名
+        - @param table_name 表名
         - @param obj 对象
         - @return 影响行数
         '''
-        self.__check_tableName(tableName)
-        pk = self.__getpk(self.__tableName)
-        if pk not in obj.keys():
-            obj[pk] = None
-        FIELDS = stitch_sequence(obj.keys())
-        VALUES = []
-        for k, v in obj.items():
-            if self.__table_dict[self.__tableName][k]["COLUMN_KEY"] != "PKI":
-                v = "null" if v is None else '"%s"' % v
-                # if v is None:
-                #     v = "null"
-                # else:
-                #     v = '"%s"' % v
-            VALUES.append(v)
-        VALUES = stitch_sequence(VALUES, isField=False)
+        self._check_table_name(table_name)
+        if obj is None:
+            obj = {}
+        primary_key = self._get_primary_key(self._table)
+        if primary_key not in obj.keys():
+            obj[primary_key] = None
+        stitch_str = stitch_sequence(obj.keys())
+        value_list = []
+        for key, value in obj.items():
+            if self._table_dict[self._table][key]["COLUMN_KEY"] != "PKI":
+                value = "null" if value is None else '"%s"' % value
+            value_list.append(value)
+        stitch_value_str = stitch_sequence(value_list, False)
         sql = 'INSERT INTO `%s` (%s) VALUES(%s)' % (
-            self.__tableName, FIELDS, VALUES)
+            self._table, stitch_str, stitch_value_str)
         return self.execute_update(sql)
 
-    def update_by_primarykey(self, tableName=None, obj={}):
+    def update_by_primarykey(self, table_name=None, obj=None):
         '''更新方法(根据主键更新，包含空值)
-        - @param tableName 表名
+        - @param table_name 表名
         - @param obj 对象
         - @return 影响行数
         '''
-        self.__check_tableName(tableName)
-        pk = self.__getpk(self.__tableName)
-        if pk not in obj.keys() or obj.get(pk) is None:
-            raise ValueError("Parameter [obj.%s] is None." % pk)
-        l = []
+        self._check_table_name(table_name)
+        if obj is None:
+            obj = {}
+        primary_key = self._get_primary_key(self._table)
+        if primary_key not in obj.keys() or obj.get(primary_key) is None:
+            raise ValueError("Parameter [obj.%s] is None." % primary_key)
+        kv_list = []
         where = "WHERE "
-        for k, v in obj.items():
-            if self.__table_dict[tableName][k]["COLUMN_KEY"] != "PRI":
-                if v is None:
-                    if self.__table_dict[tableName][k]["IS_NULLABLE"] == "YES":
-                        l.append("%s=null" % (k))
+        for key, value in obj.items():
+            if self._table_dict[table_name][key]["COLUMN_KEY"] != "PRI":
+                if value is None:
+                    if self._table_dict[table_name][key]["IS_NULLABLE"] == "YES":
+                        kv_list.append("%s=null" % (key))
                     else:
-                        l.append("%s=''" % (k))
+                        kv_list.append("%s=''" % (key))
                 else:
-                    l.append("%s='%s'" % (k, v))
+                    kv_list.append("%s='%s'" % (key, value))
             else:
-                where += "%s='%s'" % (k, v)
+                where += "%s='%s'" % (key, value)
         sql = "UPDATE `%s` SET %s %s" % (
-            self.__tableName, stitch_sequence(l, isField=False), where)
+            self._table, stitch_sequence(kv_list, False), where)
         return self.execute_update(sql)
 
-    def update_by_primarikey_selective(self, tableName=None, obj={}):
+    def update_by_primarikey_selective(self, table_name=None, obj=None):
         '''更新方法(根据主键更新，不包含空值)
-        - @param tableName 表名
+        - @param table_name 表名
         - @param obj 对象
         - @return 影响行数
         '''
-        self.__check_tableName(tableName)
-        pk = self.__getpk(self.__tableName)
-        if pk not in obj.keys() or obj.get(pk) is None:
-            raise ValueError("Parameter [obj.%s] is None." % pk)
+        self._check_table_name(table_name)
+        if obj is None:
+            obj = {}
+        primary_key = self._get_primary_key(self._table)
+        if primary_key not in obj.keys() or obj.get(primary_key) is None:
+            raise ValueError("Parameter [obj.%s] is None." % primary_key)
         where = "WHERE "
-        l = []
-        for k, v in obj.items():
-            if self.__table_dict[self.__tableName][k]["COLUMN_KEY"] != "PRI":
-                if v is None:
+        kv_list = []
+        for key, value in obj.items():
+            if self._table_dict[self._table][key]["COLUMN_KEY"] != "PRI":
+                if value is None:
                     continue
-                l.append("%s='%s'" % (k, v))
+                kv_list.append("%s='%s'" % (key, value))
             else:
-                where += "%s='%s'" % (k, v)
+                where += "%s='%s'" % (key, value)
         sql = "UPDATE `%s` SET %s %s" % (
-            self.__tableName, stitch_sequence(l, isField=False), where)
+            self._table, stitch_sequence(kv_list, False), where)
         return self.execute_update(sql)
 
-    def remove_by_primarykey(self, tableName=None, value=None):
+    def remove_by_primarykey(self, table_name=None, value=None):
         '''删除方法（根据主键删除）
-        - @param tableName 表名
+        - @param table_name 表名
         - @param valuej 主键值
         - @return 影响行数
         '''
-        self.__check_tableName(tableName)
+        self._check_table_name(table_name)
         if value is None:
             raise ValueError("Parameter [value] can not be None.")
-        pk = self.__getpk(self.__tableName)
+        primary_key = self._get_primary_key(self._table)
         sql = "DELETE FROM `%s` WHERE `%s`='%s'" % (
-            self.__tableName, pk, value)
+            self._table, primary_key, value)
         return self.execute_update(sql)
 
 
 class Page(object):
     '分页对象'
 
-    def __init__(self, pageNum=1, pageSize=10, count=False):
+    def __init__(self, page_num=1, page_size=10, count=False):
         '''
         Page 初始化方法
-        - @param pageNum 页码，默认为1
-        - @param pageSize 页面大小, 默认为10
+        - @param page_num 页码，默认为1
+        - @param page_size 页面大小, 默认为10
         - @param count 是否包含 count 查询
         '''
-        self.pageNum = pageNum if pageNum > 0 else 1            # 当前页数
-        self.pageSize = pageSize if pageSize > 0 else 10        # 分页大小
-        self.total = 0                                          # 总记录数
-        self.pages = 1                                          # 总页数
-        self.startRow = (self.pageNum - 1) * \
-            self.pageSize     # 起始行（用于 mysql 分页查询）
-        self.endRow = self.startRow + self.pageSize             # 结束行（用于 mysql 分页查询）
+        # 当前页数
+        self.page_num = page_num if page_num > 0 else 1
+        # 分页大小
+        self.page_size = page_size if page_size > 0 else 10
+        # 总记录数
+        self.total = 0
+        # 总页数
+        self.pages = 1
+        # 起始行（用于 mysql 分页查询）
+        self.start_row = (self.page_num - 1) * self.page_size
+        # 结束行（用于 mysql 分页查询）
+        self.end_row = self.start_row + self.page_size
 
 
 class QueryUtil(object):
     '''
     SQL 语句拼接工具类：
-    - 主方法：querySql(sql, filters)
-    - 参数说明：   
+    - 主方法: querySql(sql, filters)
+
+    参数说明:
     - @param sql：需要拼接的 SQL 语句
-    - @param filters：拼接 SQL 的过滤条件 \n
+    - @param filters：拼接 SQL 的过滤条件
+
     filters 过滤条件说明：
     - 支持拼接条件如下：
     - 1、等于（如：{"id": 2}, 拼接后为：id=2)
@@ -418,7 +434,6 @@ class QueryUtil(object):
     - 12、分组（如：{"groupby": "status"}，拼接后为：GROUP BY status）
     - 13、排序（如：{"orderby": "createDate"}，拼接后为：ORDER BY createDate）
     '''
-
     NE = "_ne_"                 # 拼接不等于
     LT = "_lt_"                 # 拼接小于
     LE = "_le_"                 # 拼接小于等于
@@ -436,74 +451,74 @@ class QueryUtil(object):
     @staticmethod
     def __filter_params(filters):
         '''过滤参数条件'''
-        s = " WHERE 1=1"
-        for k, v in filters.items():
-            if k.startswith(QueryUtil.IN):                  # 拼接 in
-                s += " AND `%s` IN (" % (k[len(QueryUtil.IN):])
-                values = v.split(",")
-                for value in values:
-                    s += " %s," % value
-                s = s[0:len(s) - 1] + ") "
-            elif k.startswith(QueryUtil.NE_IN):             # 拼接 not in
-                s += " AND `%s` NOT IN (" % (k[len(QueryUtil.NE_IN):])
-                values = v.split(",")
-                for value in values:
-                    s += " %s," % value
-                s = s[0:len(s) - 1] + ") "
-            elif k.startswith(QueryUtil.LIKE):              # 拼接 like
-                s += " AND `%s` LIKE '%%%s%%' " % (k[len(QueryUtil.LIKE):], v)
-            elif k.startswith(QueryUtil.LEFT_LIKE):         # 拼接左 like
-                s += " AND `%s` LIKE '%%%s' " % (
-                    k[len(QueryUtil.LEFT_LIKE):], v)
-            elif k.startswith(QueryUtil.RIGHT_LIKE):        # 拼接右 like
-                s += " AND `%s` LIKE '%s%%' " % (
-                    k[len(QueryUtil.RIGHT_LIKE):], v)
-            elif k.startswith(QueryUtil.NE):                # 拼接不等于
-                s += " AND `%s` != '%s' " % (k[len(QueryUtil.NE):], v)
-            elif k.startswith(QueryUtil.LT):                # 拼接小于
-                s += " AND `%s` < '%s' " % (k[len(QueryUtil.LT):], v)
-            elif k.startswith(QueryUtil.LE):                # 拼接小于等于
-                s += " AND `%s` <= '%s' " % (k[len(QueryUtil.LE):], v)
-            elif k.startswith(QueryUtil.GT):                # 拼接大于
-                s += " AND `%s` > '%s' " % (k[len(QueryUtil.GT):], v)
-            elif k.startswith(QueryUtil.GE):                # 拼接大于等于
-                s += " AND `%s` >= '%s' " % (k[len(QueryUtil.GE):], v)
-            else:                                           # 拼接等于
-                if isinstance(v, str):
-                    s += " AND `%s`='%s' " % (k, v)
-                elif isinstance(v, int):
-                    s += " AND `%s`=%d " % (k, v)
-        return s
+        res = " WHERE 1=1"
+        for key, value in filters.items():
+            if key.startswith(QueryUtil.IN):                  # 拼接 in
+                res += " AND `%s` IN (" % (key[len(QueryUtil.IN):])
+                value_list = value.split(",")
+                for value in value_list:
+                    res += " %s," % value
+                res = res[0:len(res) - 1] + ") "
+            elif key.startswith(QueryUtil.NE_IN):               # 拼接 not in
+                res += " AND `%s` NOT IN (" % (key[len(QueryUtil.NE_IN):])
+                value_list = value.split(",")
+                for value in value_list:
+                    res += " %s," % value
+                res = res[0:len(res) - 1] + ") "
+            elif key.startswith(QueryUtil.LIKE):                # 拼接 like
+                res += " AND `%s` LIKE '%%%s%%' " % (key[len(QueryUtil.LIKE):], value)
+            elif key.startswith(QueryUtil.LEFT_LIKE):           # 拼接左 like
+                res += " AND `%s` LIKE '%%%s' " % (
+                    key[len(QueryUtil.LEFT_LIKE):], value)
+            elif key.startswith(QueryUtil.RIGHT_LIKE):          # 拼接右 like
+                res += " AND `%s` LIKE '%s%%' " % (
+                    key[len(QueryUtil.RIGHT_LIKE):], value)
+            elif key.startswith(QueryUtil.NE):                  # 拼接不等于
+                res += " AND `%s` != '%s' " % (key[len(QueryUtil.NE):], value)
+            elif key.startswith(QueryUtil.LT):                  # 拼接小于
+                res += " AND `%s` < '%s' " % (key[len(QueryUtil.LT):], value)
+            elif key.startswith(QueryUtil.LE):                  # 拼接小于等于
+                res += " AND `%s` <= '%s' " % (key[len(QueryUtil.LE):], value)
+            elif key.startswith(QueryUtil.GT):                  # 拼接大于
+                res += " AND `%s` > '%s' " % (key[len(QueryUtil.GT):], value)
+            elif key.startswith(QueryUtil.GE):                  # 拼接大于等于
+                res += " AND `%s` >= '%s' " % (key[len(QueryUtil.GE):], value)
+            else:                                               # 拼接等于
+                if isinstance(value, str):
+                    res += " AND `%s`='%s' " % (key, value)
+                elif isinstance(value, int):
+                    res += " AND `%s`=%d " % (key, value)
+        return res
 
     @staticmethod
     def __filter_group(filters):
         '''过滤分组'''
         group = filters.pop(QueryUtil.GROUP)
-        s = " GROUP BY %s" % (group)
-        return s
+        res = " GROUP BY %s" % (group)
+        return res
 
     @staticmethod
     def __filter_order(filters):
         '''过滤排序'''
         order = filters.pop(QueryUtil.ORDER)
-        type = filters.pop(QueryUtil.ORDER_TYPE, "asc")
-        s = " ORDER BY `%s` %s" % (order, type)
-        return s
+        order_type = filters.pop(QueryUtil.ORDER_TYPE, "asc")
+        res = " ORDER BY `%s` %s" % (order, order_type)
+        return res
 
     @staticmethod
     def __filter_page(filters):
         '''过滤 page 对象'''
         page = filters.pop("page")
-        return " LIMIT %d,%d" % (page.startRow, page.endRow)
+        return " LIMIT %d,%d" % (page.start_row, page.end_row)
 
     @staticmethod
-    def query_sql(sql=None, filters=dict()):
+    def query_sql(sql=None, filters=None):
         '''拼接 SQL 查询条件
         - @param sql SQL 语句
         - @param filters 过滤条件
         - @return 返回拼接 SQL
         '''
-        if not filters:
+        if filters is None:
             return sql
         else:
             if not isinstance(filters, dict):
@@ -525,3 +540,64 @@ class QueryUtil(object):
             if page:
                 sql += page
         return sql
+
+
+def _test1():
+    CONFIG = {
+        "user": "root",
+        "password": "64261927",
+        "database": "custom",
+        "table": "province"
+    }
+    # 指定初始化 table
+    test_dao = BaseDao(**CONFIG)
+
+    # 查询单条记录
+    # one = test_dao.select_one()
+    # print(one)
+
+    # 查询所有记录
+    # all = test_dao.select_all()
+    # print(all)
+
+    # 查询分页记录
+    # page = test_dao.select_page()
+    # print(page)
+
+    # 按主键查询
+    one_pk = test_dao.select_pk(primary_key=1)
+    print(one_pk)
+
+def _test2():
+    CONFIG = {
+        "user": "root",
+        "password": "64261927",
+        "database": "custom"
+    }
+    # 初始化所有 table
+    test_dao = BaseDao(**CONFIG)
+
+    # one1 = test_dao.select_one("province")
+    # print(one1)
+    # one2 = test_dao.select_one("city")
+    # print(one2)
+
+    # filters1 = {
+    #     QueryUtil.GE + "id": 5,
+    #     QueryUtil.LT + "id": 30,
+    #     QueryUtil.ORDER: "id",
+    #     QueryUtil.ORDER_TYPE: "desc"
+    # }
+    # all_filters = test_dao.select_all("province", filters1)
+    # print(all_filters)
+
+    filters2 = {
+        QueryUtil.LEFT_LIKE + "province": "省",
+    }
+    page = Page(1, 20)
+    page_filters = test_dao.select_page("province", page, filters2)
+    print(page_filters)
+
+if __name__ == '__main__':
+    # _test1()
+    _test2()
