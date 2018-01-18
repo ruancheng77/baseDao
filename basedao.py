@@ -27,7 +27,7 @@ def get_time(fmt=None):
     return time.strftime(fmt, time.localtime())
 
 
-def stitch_sequence(seq=None, suf=None, is_field=True):
+def stitch_sequence(seq=None, is_field=True, suf=None):
     '''
     序列拼接方法, 用于将序列拼接成字符串
     - :seq: 拼接序列
@@ -545,8 +545,8 @@ class QueryUtil(object):
 def _test1():
     CONFIG = {
         "user": "root",
-        "password": "64261927",
-        "database": "custom",
+        "password": "root",
+        "database": "test",
         "table": "province"
     }
     # 指定初始化 table
@@ -571,8 +571,8 @@ def _test1():
 def _test2():
     CONFIG = {
         "user": "root",
-        "password": "64261927",
-        "database": "custom"
+        "password": "root",
+        "database": "test"
     }
     # 初始化所有 table
     test_dao = BaseDao(**CONFIG)
@@ -598,6 +598,39 @@ def _test2():
     page_filters = test_dao.select_page("province", page, filters2)
     print(page_filters)
 
+def _test3():
+    CONFIG = {
+        "user": "root",
+        "password": "root",
+        "database": "test",
+        "table": "province"
+    }
+    # 初始化所有 table
+    test_dao = BaseDao(**CONFIG)
+    province = {
+        "id": None,
+        "province_id": "830000",
+        "province": "测试"
+    }
+
+    # test_dao.save(obj=province)
+    
+    # f1 = {
+    #     "province": "测试"
+    # }
+    # item = test_dao.select_one(filters=f1)
+    # print(item)
+    # item["province"] = "测试1"
+    # test_dao.update_by_primarikey_selective(obj=item)
+
+    # f2 = {
+    #     "province": "测试1"
+    # }
+    # item = test_dao.select_one(filters=f2)
+    # test_dao.remove_by_primarykey(value=item["id"])
+
+
 if __name__ == '__main__':
     # _test1()
-    _test2()
+    # _test2()
+    _test3()
