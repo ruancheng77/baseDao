@@ -189,6 +189,8 @@ class BaseDao(object):
         if table_name is None:
             if self._table is None:
                 raise Exception("Parameter [table_name] is None.")
+            else:
+                table_name = self._table
         else:
             if self._table != table_name:
                 self._table = table_name
@@ -609,11 +611,10 @@ def _test3():
     test_dao = BaseDao(**CONFIG)
     province = {
         "id": None,
-        "province_id": "830000",
+        "province_id": "990000",
         "province": "测试"
     }
-
-    # test_dao.save(obj=province)
+    test_dao.save(obj=province)
     
     # f1 = {
     #     "province": "测试"
@@ -623,6 +624,9 @@ def _test3():
     # item["province"] = "测试1"
     # test_dao.update_by_primarikey_selective(obj=item)
 
+    # item["province"] = "测试2"
+    # test_dao.update_by_primarykey("province", item)
+    
     # f2 = {
     #     "province": "测试1"
     # }
