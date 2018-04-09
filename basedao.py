@@ -42,6 +42,11 @@ def stitch_sequence(seq=None, is_field=True, suf=None):
         res += '`%s`%s' % (item, suf) if is_field else '%s%s' % (item, suf)
     return res[:-len(suf)]
 
+def escape_quotes(val):
+    '转换单引号和双引号'
+    if type(val) == str:
+        return val.replace("'","\\\'")
+    return val
 
 class BaseDao(object):
     """
@@ -70,9 +75,6 @@ class BaseDao(object):
             raise ValueError("Parameter [password] is None.")
         if database is None:
             raise ValueError("Parameter [database] is None.")
-        if table is None:
-            print(
-                "WARNING >>> Parameter [table] is None. All tables will be initialized.")
         start = time.time()
         # 执行初始化
         self._config = dict({
@@ -88,17 +90,17 @@ class BaseDao(object):
 
     def __del__(self):
         '重写类被清除时调用的方法'
-        if self.__cursor:
-            self.__cursor.close()
-        if self.__conn:
-            self.__conn.close()
+        if self._cursor:
+            self._cursor.close()
+        if self._conn:
+            self._conn.close()
         logging.debug("[{0}] 连接关闭。".format(self._database))
 
     def _init_connect(self):
         '初始化连接'
         try:
-            self.__conn = PooledDB.connect(**self._config)
-            self.__cursor = self.__conn.cursor()
+            self._conn = PooledDB.connect(**self._config)
+            self._cursor = self._conn.cursor()
         except Exception as e:
             logging.error(e)
 
@@ -205,8 +207,8 @@ class BaseDao(object):
             if sql is None:
                 raise Exception("Parameter sql is None.")
             logging.info("[%s] SQL >>> [%s]" % (self._database, sql))
-            self.__cursor.execute(sql)
-            return self.__cursor.fetchone() if single else self.__cursor.fetchall()
+            self._cursor.execute(sql)
+            return self._cursor.fetchone() if single else self._cursor.fetchall()
         except Exception as e:
             logging.error(e)
 
@@ -218,12 +220,12 @@ class BaseDao(object):
             if sql is None:
                 raise Exception("Parameter sql is None.")
             logging.info("[%s] SQL >>> [%s]" % (self._database, sql))
-            result = self.__cursor.execute(sql)
-            self.__conn.commit()
+            result = self._cursor.execute(sql)
+            self._conn.commit()
             return result
         except Exception as e:
             logging.error(e)
-            self.__conn.rollback()
+            self._conn.rollback()
 
     def select_one(self, table_name=None, filters=None):
         '''查询单个对象
@@ -312,7 +314,7 @@ class BaseDao(object):
         for key, value in obj.items():
             if self._table_dict[self._table][key]["COLUMN_KEY"] != "PKI":
                 value = "null" if value is None else '"%s"' % value
-            value_list.append(value)
+            value_list.append(escape_quotes(value))
         stitch_value_str = stitch_sequence(value_list, False)
         sql = 'INSERT INTO `%s` (%s) VALUES(%s)' % (
             self._table, stitch_str, stitch_value_str)
@@ -340,9 +342,9 @@ class BaseDao(object):
                     else:
                         kv_list.append("%s=''" % (key))
                 else:
-                    kv_list.append("%s='%s'" % (key, value))
+                    kv_list.append("%s='%s'" % (key, escape_quotes(value)))
             else:
-                where += "%s='%s'" % (key, value)
+                where += "%s='%s'" % (key, escape_quotes(value))
         sql = "UPDATE `%s` SET %s %s" % (
             self._table, stitch_sequence(kv_list, False), where)
         return self.execute_update(sql)
@@ -365,9 +367,9 @@ class BaseDao(object):
             if self._table_dict[self._table][key]["COLUMN_KEY"] != "PRI":
                 if value is None:
                     continue
-                kv_list.append("%s='%s'" % (key, value))
+                kv_list.append("%s='%s'" % (key, escape_quotes(value)))
             else:
-                where += "%s='%s'" % (key, value)
+                where += "%s='%s'" % (key, escape_quotes(value))
         sql = "UPDATE `%s` SET %s %s" % (
             self._table, stitch_sequence(kv_list, False), where)
         return self.execute_update(sql)
